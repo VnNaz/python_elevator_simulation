@@ -2,7 +2,7 @@ import random
 import threading
 import time
 from Passenger import Passenger
-from Elevator import DirectionStatus, Elevator
+from Elevator import DirectionStatus, ElevatorThread
 
 
 def elevator(elevator_id):
@@ -16,22 +16,22 @@ def elevator(elevator_id):
         assert  aim_floor > 0
 
         # elevator should not see the passenger, but the required floor
-        floor_lock.acquire()
-        if status == DirectionStatus.Idle and req_floors: # idle elevator, get it move!
-            floor = max(req_floors.keys(), key=lambda k: abs(k) - curr_floor)
-            passengers_waiting = req_floors[floor]
-            del req_floors[floor]
+        request_lock.acquire()
+        if status == DirectionStatus.Idle and request_queue: # idle elevator, get it move!
+            floor = max(request_queue.keys(), key=lambda k: abs(k) - curr_floor)
+            passengers_waiting = request_queue[floor]
+            del request_queue[floor]
             aim_floor = abs(floor)
 
             status = DirectionStatus.Catch
-        floor_lock.release()
+        request_lock.release()
 
         passenger_lock.acquire()
         # delete request
         if status not in (DirectionStatus.Idle, DirectionStatus.Catch):
-            floor_lock.acquire()
-            req_floors.pop(curr_floor*(1 if status == DirectionStatus.Up else -1), None)
-            floor_lock.release()
+            request_lock.acquire()
+            request_queue.pop(curr_floor * (1 if status == DirectionStatus.Up else -1), None)
+            request_lock.release()
 
         # collect passenger current floor, pass by
         for _passenger in passengers[:]:
@@ -62,7 +62,7 @@ def elevator(elevator_id):
                     else:
                         aim_floor = min(_passenger.to_floor, aim_floor)
 
-                    print(f'elevator ({elevator_id}) take passenger ({_passenger.id}) at floor {curr_floor}')
+                    print(f'elevator ({elevator_id}) take passenger ({_passenger.elevator_id}) at floor {curr_floor}')
         passenger_lock.release()
 
         # exit the passenger
@@ -72,22 +72,17 @@ def elevator(elevator_id):
                 print(f'elevator ({elevator_id}) drop passenger ({_passenger.id}) at floor {curr_floor}')
 
         if status != DirectionStatus.Idle and curr_floor != aim_floor:
-            print_text(f'elevator ({elevator_id}) with current floor {curr_floor} is going to floor {aim_floor}')
+            print(f'elevator ({elevator_id}) with current floor {curr_floor} is going to floor {aim_floor}')
             time.sleep(3)
             curr_floor += 1 if aim_floor > curr_floor else -1
         elif curr_floor == aim_floor and not passengers_inside:
             status = DirectionStatus.Idle
 
-def print_text(text):
-    print_lock.acquire()
-    print(text)
-    print_lock.release()
-
 # passenger queue
 passengers = []
 
 # lock
-floor_lock = threading.RLock()
+request_lock = threading.RLock()
 passenger_lock = threading.RLock()
 print_lock = threading.RLock()
 
@@ -95,10 +90,11 @@ print_lock = threading.RLock()
 elevators = []
 
 # required floor
-req_floors = {}
+request_queue = {}
 
+# def __init__(self, x, y, request_queue, request_lock, passenger_list, passenger_lock, elevator_id):
 for _ in range(2):
-    thread = threading.Thread(target=elevator, args=(_ + 1,))
+    thread = ElevatorThread(0,0, request_queue, request_lock, passengers, passenger_lock, _ + 1)
     thread.start()
     elevators.append(thread)
 
@@ -109,14 +105,15 @@ while passenger_id < 4:
     to_floor = random.randint(1,9)
     if from_floor == to_floor:
         continue
-    passenger = Passenger(passenger_id, _from_floor=from_floor, _to_floor=to_floor)
+    passenger = Passenger(passenger_id, _from_floor=from_floor, _to_floor=to_floor, x=0, y=0)
     passenger_id += 1
 
-    # add into passengers into require floor
-    req_floors.setdefault(passenger.from_floor*(1 if passenger.status == DirectionStatus.Up else -1), []).append(passenger)
+    with request_lock, passenger_lock:
+        # add into passengers into require floor
+        request_queue.setdefault(passenger.from_floor * (1 if passenger.status == DirectionStatus.Up else -1), []).append(passenger)
 
-    # add to passengers queue
-    passengers.append(passenger)
+        # add to passengers queue
+        passengers.append(passenger)
 
     # output
     print(f'passenger ({passenger.id}) waiting in floor {passenger.from_floor} want to floor {passenger.to_floor}')
